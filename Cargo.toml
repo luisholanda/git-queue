@@ -1,0 +1,30 @@
+[package]
+name = "qg"
+version = "0.1.0"
+authors = ["Luis Holanda <luiscmholanda@gmail.com>"]
+repository = "https://github.com/luisholanda/queued-git"
+license = "MIT OR Apache 2.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "qg"
+path = "src/main.rs"
+
+[dependencies]
+git-queue = { path = "./git-queue" }
+phf = { version = "0.9.0", features = ["macros"] }
+
+[dependencies.clap]
+default-features = false
+features = ["suggestions", "color", "wrap_help"]
+version = "2.33.0"
+
+[workspace]
+members = [".", "git-queue"]
+
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1
