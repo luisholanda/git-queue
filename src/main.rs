@@ -39,7 +39,15 @@ fn generate_completions(matches: &clap::ArgMatches<'_>) {
     build_app().gen_completions_to(clap::crate_name!(), shell, &mut std::io::stdout());
 }
 
+fn init_logging() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .without_time()
+        .init();
+}
+
 fn main() {
+    init_logging();
     let app = build_app();
     let matches = app.get_matches();
 

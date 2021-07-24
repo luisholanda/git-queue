@@ -1,22 +1,20 @@
-//! # Stack State Log
+//! # Queue State Log
 //!
-//! Each stacked branch have a log attached to it (in the ref
-//! `refs/stacklogs/<branchname>`). The purpose of this log is
-//! to track each operation executed in the stack.
+//! Each queue have a log attached to it (in the ref `refs/queuelogs/<queue>`). The
+//! purpose of this log is to track each operation executed in the queue.
 //!
-//! Each entry in the log ensures it have the proper references
-//! to objects it needs to make it safe against GC.
+//! Each entry in the log ensures it have the proper references to objects it needs
+//! to make it safe against GC.
 //!
-//! As the tool may evolve, the log format can change, see the
-//! documentation for each version struct to know the specifics
-//! of each one.
+//! As the tool may evolve, the log format can change, see the documentation for each
+//! version struct to know the specifics of each one.
 //!
 //! ## Log Entry Version 1
 //!
 //! ### Commit message
 //!
 //! Each entry contains a message describing what command was executed in the
-//! stack. This is most for human consumption, but later will be used to provide
+//! queue. This is most for human consumption, but later will be used to provide
 //! undo and redo operations.
 //!
 //! ### Tree
@@ -28,7 +26,9 @@
 //!   * `version: 1`
 //!   * `previous: <sha1 or missing>`: the OID of the previous log entry or
 //!      nothing if it is the first one.
-//!   * `head: <sha1>`: the branch head at the time this entry was created.
+//!   * `head: <sha1>`: the queue head at the time this entry was created.
+//!   * `base_name`: the name of the base branch of this queue.
+//!   * `base: <sha1>`: The OID of the last commit before the applied patches.
 //!   * `applied`: a list of the applied patches.
 //!   * `unapplied`: same of `applied`, but for unapplied patches.
 //!   * `patches`: a map of each patch name to its commit OID when the entry was created.
@@ -45,7 +45,7 @@ use std::collections::HashMap;
 
 use git2::{Error, Oid, Repository, Tree};
 
-/// The stack state at a specific point in time.
+/// The queue state at a specific point in time.
 pub struct QueueState {
     oid: Option<Oid>,
     gitref_name: String,
@@ -53,14 +53,14 @@ pub struct QueueState {
 }
 
 impl QueueState {
-    /// Get the current stack state for the given branch.
+    /// Get the current state for the given queue.
     ///
     /// # Errors
     ///
-    /// If the branch does not have a stack initialized, this function will
-    /// return a [`git2::Error`] instance with code [`git2::ErrorCode::NotFound`].
-    pub fn current_for_branch(repo: &Repository, branch: &str) -> Result<Self, Error> {
-        let gitref_name = Self::gitref_name(branch);
+    /// If the queue does not exist, this function will return a [`git2::Error`]
+    /// instance with code [`git2::ErrorCode::NotFound`].
+    pub fn current_for_queue(repo: &Repository, queue: &str) -> Result<Self, Error> {
+        let gitref_name = Self::gitref_name(queue);
         let gitref = repo.find_reference(&gitref_name)?;
         let commit = gitref.peel_to_commit()?;
         let tree = commit.tree()?;
@@ -81,8 +81,8 @@ impl QueueState {
     }
 
     /// Create a new stack state in the given branch.
-    pub fn new(repo: &Repository, branch: &str) -> Result<Self, Error> {
-        let gitref_name = Self::gitref_name(branch);
+    pub fn new(repo: &Repository, queue: &str, base: &git2::Branch<'_>) -> Result<Self, Error> {
+        let gitref_name = Self::gitref_name(queue);
         if repo.find_reference(&gitref_name).is_ok() {
             return Err(Error::new(
                 git2::ErrorCode::Invalid,
@@ -91,22 +91,26 @@ impl QueueState {
             ));
         }
 
-        let head = repo.head()?.peel_to_commit()?;
-        let head_oid = head.id();
-        let user = repo.signature()?;
+        let base_commit = base.get().peel_to_commit()?;
+        let base_oid = base_commit.id();
+        let base_name = base.name()?.unwrap().to_string();
 
         let message = "initialise stack log".to_string();
         let entry = LogEntryV1 {
             message,
             previous: None,
-            head: LogOid(head_oid),
+            head: LogOid(base_oid),
+            base_name,
+            base: LogOid(base_oid),
             applied: vec![],
             unapplied: vec![],
             patches: HashMap::new(),
         };
 
-        let tree = entry.build_tree(repo, &head.tree()?)?;
+        let tree = entry.build_tree(repo, &base_commit.tree()?)?;
 
+
+        let user = repo.signature()?;
         let commit = repo.commit(
             Some(&gitref_name),
             &user,
@@ -114,7 +118,7 @@ impl QueueState {
             &entry.message,
             &tree,
             // There is no previous entry, nor patches to add.
-            &[&head],
+            &[&base_commit],
         )?;
 
         Ok(Self {
@@ -122,6 +126,10 @@ impl QueueState {
             gitref_name,
             entry,
         })
+    }
+
+    pub fn base_name(&self) -> &str {
+        &self.entry.base_name
     }
 
     /// The HEAD commit of thi state.
@@ -213,7 +221,12 @@ impl QueueState {
 
     /// Creates a new state in the log entry after modifying with the given
     /// function.
-    pub fn create_next<T, F>(&self, repo: &Repository, message: String, func: F) -> Result<(Self, T), Error>
+    pub fn create_next<T, F>(
+        &self,
+        repo: &Repository,
+        message: String,
+        func: F,
+    ) -> Result<(Self, T), Error>
     where
         F: FnOnce(&mut Self) -> Result<T, Error>,
     {
@@ -237,6 +250,8 @@ impl QueueState {
             entry: LogEntryV1 {
                 message,
                 head: LogOid(self.head()),
+                base: self.entry.base,
+                base_name: self.entry.base_name.clone(),
                 previous: self.oid.map(LogOid),
                 applied: self.entry.applied.clone(),
                 unapplied: self.entry.unapplied.clone(),
@@ -275,7 +290,7 @@ impl QueueState {
     }
 
     fn gitref_name(branch: &str) -> String {
-        format!("refs/stacklogs/{}", branch)
+        format!("refs/queuelogs/{}", branch)
     }
 }
 
@@ -284,6 +299,8 @@ struct LogEntryV1 {
     message: String,
     previous: Option<LogOid>,
     head: LogOid,
+    base: LogOid,
+    base_name: String,
     applied: Vec<String>,
     unapplied: Vec<String>,
     patches: HashMap<String, LogOid>,
