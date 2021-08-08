@@ -41,7 +41,7 @@ fn close(queues: Vec<String>, force: bool) -> Result<(), Error> {
         match Queue::for_queue(&ctx, &q) {
             Ok(Some(q)) => git_queues.push(q),
             Ok(None) => throw!(DATAERR, "Queue `{}` not found", q),
-            Err(e) => crate::error::handle_any_git_error(e)?,
+            Err(e) => return Err(e.into())
         }
     }
 
@@ -53,7 +53,7 @@ fn close(queues: Vec<String>, force: bool) -> Result<(), Error> {
 }
 
 fn close_one(queue: Queue<'_>, force: bool) -> Result<(), Error> {
-    let res = if queue.is_current() {
+    if queue.is_current() {
         throw!(
             USAGE,
             "Cannot close current queue, please switch to a different queue/branch \
@@ -61,16 +61,12 @@ fn close_one(queue: Queue<'_>, force: bool) -> Result<(), Error> {
         );
     } else if force {
         // TODO: remove any pending patches.
-        queue.close()
+        queue.close()?
     } else if queue.can_close() {
-        queue.close()
+        queue.close()?
     } else {
         throw!(USAGE, "The queue contains {} patches, cannot close.");
     };
 
-    if let Err(err) = res {
-        crate::error::handle_any_git_error(err)
-    } else {
-        Ok(())
-    }
+    Ok(())
 }

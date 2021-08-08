@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 git-queue = { path = "./git-queue" }
 phf = { version = "0.9.0", features = ["macros"] }
+prettytable-rs = "0.8.0"
 tracing = "0.1.26"
 anyhow = "1.0.42"
 exitcode = "1.1.2"

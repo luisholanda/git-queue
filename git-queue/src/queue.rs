@@ -1,4 +1,4 @@
-use git2::ErrorCode;
+use git2::{BranchType, ErrorCode};
 
 use self::log::QueueState;
 use crate::{ctx::Ctx, error::Error};
@@ -61,6 +61,34 @@ impl<'r> Queue<'r> {
             state,
             ctx,
         }))
+    }
+
+    pub fn list(ctx: &'r Ctx) -> Result<impl Iterator<Item = Result<Queue<'r>, Error>>, Error> {
+        let branches = ctx.repo().branches(Some(BranchType::Local))?;
+
+        Ok(branches.filter_map(move |r| {
+            r.map_err(Error::Git)
+                .and_then(|(b, _)| {
+                    let name = b.name()?.ok_or(Error::NonUtf8)?;
+                    if name.starts_with("queues/") {
+                        let name = name.split('/').nth(1).unwrap();
+                        Self::for_queue(ctx, name)?
+                            .ok_or_else(|| Error::Inconsistency("queuelog"))
+                            .map(Some)
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .transpose()
+        }))
+    }
+
+    pub fn name(&self) -> &str {
+        self.state.name()
+    }
+
+    pub fn base_name(&self) -> &str {
+        self.state.base_name()
     }
 
     pub fn can_close(&self) -> bool {

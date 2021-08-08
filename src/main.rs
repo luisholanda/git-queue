@@ -8,6 +8,7 @@ use clap::{Arg, Shell, SubCommand};
 pub(crate) mod error;
 mod commands;
 mod git;
+mod table;
 
 pub(crate) type App = clap::App<'static, 'static>;
 

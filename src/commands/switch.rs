@@ -86,21 +86,21 @@ fn switch(queue: &str, create: bool, branch: Option<&str>, merge: bool) -> Resul
                 match ctx.find_branch(branch) {
                     Ok(Some(branch)) => branch,
                     Ok(None) => throw!(DATAERR, "Branch {} does not exist", branch),
-                    Err(err) => crate::error::handle_any_git_error(err)?,
+                    Err(err) => return Err(err.into())
                 }
-            } else if let Some(branch) = ensure!(ctx.current_branch()) {
+            } else if let Some(branch) = ctx.current_branch()? {
                 branch
             } else {
                 crate::error::not_properly_initialized()?
             };
 
             // We did just check that the queue didn't exist, so this cannot return Ok(None).
-            ensure!(Queue::initialize(&ctx, queue, base_branch)).unwrap()
+            Queue::initialize(&ctx, queue, base_branch)?.unwrap()
         }
-        Err(err) => crate::error::handle_any_git_error(err)?,
+        Err(err) => return Err(err.into())
     };
 
-    ensure!(queue.switch_to(merge));
+    queue.switch_to(merge)?;
 
     Ok(())
 }

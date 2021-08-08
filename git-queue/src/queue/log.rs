@@ -141,6 +141,10 @@ impl QueueState {
         self.entry.head.0
     }
 
+    pub fn name(&self) -> &str {
+        self.gitref().split_at("refs/queuelogs/".len()).1
+    }
+
     pub fn gitref(&self) -> &str {
         &self.gitref_name
     }
