@@ -1,8 +1,13 @@
+#![feature(never_type)]
+
 #[macro_use]
 extern crate clap;
 use clap::{Arg, Shell, SubCommand};
 
+#[macro_use]
+pub(crate) mod error;
 mod commands;
+mod git;
 
 pub(crate) type App = clap::App<'static, 'static>;
 
@@ -47,17 +52,20 @@ fn init_logging() {
 }
 
 fn main() {
+    human_panic::setup_panic!();
     init_logging();
     let app = build_app();
     let matches = app.get_matches();
 
     if let (subcmd, Some(submatches)) = matches.subcommand() {
         if let Some(execfn) = commands::get_exec_fn(subcmd) {
-            let _ = execfn(submatches);
+            if let Err(err) = execfn(submatches) {
+                err.report(&mut std::io::stderr());
+            }
         } else if subcmd == GENERATE_COMPLETIONS {
             generate_completions(submatches);
         }
     } else {
-        std::process::exit(1);
+        std::process::exit(exitcode::USAGE);
     }
 }

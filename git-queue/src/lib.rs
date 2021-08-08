@@ -1,4 +1,5 @@
-pub use git2::{Error, ErrorClass, ErrorCode};
+pub use self::error::Error;
+pub use git2::{ErrorClass, ErrorCode};
 
 pub mod ctx;
 pub mod error;

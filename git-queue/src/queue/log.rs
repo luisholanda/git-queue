@@ -41,9 +41,9 @@
 //! * The branch head commit when the entry was created.
 //! * All applied or unapplied patches commits when the entry was created.
 
+use crate::error::Error;
+use git2::{Oid, Repository, Tree};
 use std::collections::HashMap;
-
-use git2::{Error, Oid, Repository, Tree};
 
 /// The queue state at a specific point in time.
 pub struct QueueState {
@@ -62,19 +62,28 @@ impl QueueState {
     pub fn current_for_queue(repo: &Repository, queue: &str) -> Result<Self, Error> {
         let gitref_name = Self::gitref_name(queue);
         let gitref = repo.find_reference(&gitref_name)?;
-        let commit = gitref.peel_to_commit()?;
-        let tree = commit.tree()?;
+        let mut commit = None;
+        let mut maybe_inconsistent = || {
+            let c = gitref.peel_to_commit()?;
+            let tree = c.tree()?;
+            commit = Some(c);
 
-        let meta_obj = tree.get_path("meta".as_ref())?.to_object(repo)?;
-        let meta_blob = meta_obj
-            .as_blob()
-            .ok_or_else(|| invalid_meta("expected meta object was a blob, but it wasn't"))?;
+            let meta_obj = tree.get_path("meta".as_ref())?.to_object(repo)?;
+            let meta_blob = meta_obj
+                .as_blob()
+                .ok_or_else(|| invalid_meta("expected meta object was a blob, but it wasn't"))?;
 
-        let entry: LogEntryV1 = serde_json::from_slice(meta_blob.content())
-            .map_err(|_| invalid_meta("expected meta content to be a JSON"))?;
+            let entry: LogEntryV1 = serde_json::from_slice(meta_blob.content())
+                .map_err(|_| invalid_meta("expected meta content to be a JSON"))?;
+
+            Ok(entry)
+        };
+
+        let entry = maybe_inconsistent()
+            .map_err(|_: git2::Error| Error::Inconsistency("queuelog reference"))?;
 
         Ok(Self {
-            oid: Some(commit.id()),
+            oid: commit.map(|c| c.id()),
             gitref_name,
             entry,
         })
@@ -84,16 +93,12 @@ impl QueueState {
     pub fn new(repo: &Repository, queue: &str, base: &git2::Branch<'_>) -> Result<Self, Error> {
         let gitref_name = Self::gitref_name(queue);
         if repo.find_reference(&gitref_name).is_ok() {
-            return Err(Error::new(
-                git2::ErrorCode::Invalid,
-                git2::ErrorClass::Reference,
-                "a stack state already exists for this branch",
-            ));
+            return Err(Error::AlreadyExists("queuelog"));
         }
 
         let base_commit = base.get().peel_to_commit()?;
         let base_oid = base_commit.id();
-        let base_name = base.name()?.unwrap().to_string();
+        let base_name = base.name()?.ok_or(Error::NonUtf8)?.to_string();
 
         let message = "initialise stack log".to_string();
         let entry = LogEntryV1 {
@@ -108,7 +113,6 @@ impl QueueState {
         };
 
         let tree = entry.build_tree(repo, &base_commit.tree()?)?;
-
 
         let user = repo.signature()?;
         let commit = repo.commit(
@@ -135,6 +139,14 @@ impl QueueState {
     /// The HEAD commit of thi state.
     pub fn head(&self) -> Oid {
         self.entry.head.0
+    }
+
+    pub fn gitref(&self) -> &str {
+        &self.gitref_name
+    }
+
+    pub fn patches_num(&self) -> usize {
+        self.entry.patches.len()
     }
 
     /// The list of applied patches and their specific commits.
@@ -289,8 +301,8 @@ impl QueueState {
         Ok(())
     }
 
-    fn gitref_name(branch: &str) -> String {
-        format!("refs/queuelogs/{}", branch)
+    fn gitref_name(queue: &str) -> String {
+        format!("refs/queuelogs/{}", queue)
     }
 }
 
@@ -307,13 +319,17 @@ struct LogEntryV1 {
 }
 
 impl LogEntryV1 {
-    fn build_tree<'r>(&self, repo: &'r Repository, prev: &Tree<'r>) -> Result<Tree<'r>, Error> {
+    fn build_tree<'r>(
+        &self,
+        repo: &'r Repository,
+        prev: &Tree<'r>,
+    ) -> Result<Tree<'r>, git2::Error> {
         let mut builder = repo.treebuilder(Some(prev))?;
 
         let meta_oid = {
             let mut writer = repo.blob_writer(Some("meta".as_ref()))?;
             serde_json::to_writer_pretty(&mut writer, self).map_err(|e| {
-                Error::new(
+                git2::Error::new(
                     git2::ErrorCode::GenericError,
                     git2::ErrorClass::Os,
                     &e.to_string(),
@@ -357,6 +373,6 @@ impl<'de> serde::Deserialize<'de> for LogOid {
     }
 }
 
-fn invalid_meta(message: &str) -> Error {
-    Error::new(git2::ErrorCode::Modified, git2::ErrorClass::Object, message)
+fn invalid_meta(message: &str) -> git2::Error {
+    git2::Error::new(git2::ErrorCode::Modified, git2::ErrorClass::Object, message)
 }

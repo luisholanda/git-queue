@@ -1,7 +1,7 @@
 use clap::{Arg, ArgMatches, SubCommand};
-use git_queue::{ctx::Ctx, queue::Queue, ErrorClass, ErrorCode, Error};
+use git_queue::queue::Queue;
 
-use crate::App;
+use crate::{error::Error, App};
 
 pub(super) fn subcommand() -> App {
     SubCommand::with_name("switch")
@@ -37,7 +37,8 @@ queue and the queue to which you are switching, the command will continue in ord
 your modifications in context.
 
 However, with this option, a three-way merge between the current queue, your working tree \
-contents, and the new queue is done, and you will be left on the new queue."),
+contents, and the new queue is done, and you will be left on the new queue.",
+                ),
             Arg::with_name("queue")
                 .required(true)
                 .empty_values(false)
@@ -54,7 +55,7 @@ contents, and the new queue is done, and you will be left on the new queue."),
         create = tracing::field::Empty,
         merge = tracing::field::Empty,
         branch = tracing::field::Empty))]
-pub(super) fn execute(args: &ArgMatches<'static>) -> Result<(), ()> {
+pub(super) fn execute(args: &ArgMatches<'static>) -> Result<(), Error> {
     let queue = args
         .value_of("queue")
         .expect("Missing required <queue> parameter");
@@ -68,39 +69,38 @@ pub(super) fn execute(args: &ArgMatches<'static>) -> Result<(), ()> {
         .record("merge", &merge)
         .record("branch", &tracing::field::debug(branch));
 
-    switch(queue, create, branch, merge).map_err(|err| {
-        tracing::error!("git2::Error: {:?}", err);
-        std::process::exit(1);
-    })
+    switch(queue, create, branch, merge)
 }
 
 fn switch(queue: &str, create: bool, branch: Option<&str>, merge: bool) -> Result<(), Error> {
-    let ctx = Ctx::current()?;
+    let ctx = crate::git::current_git_ctx()?;
 
-    let res = match Queue::for_queue(&ctx, queue) {
-        Ok(queue) => queue.switch_to(merge),
-        Err(err) if err.class() == ErrorClass::Reference && err.code() == ErrorCode::NotFound => {
-            if create {
-                let base_branch = if let Some(branch) = branch {
-                    ctx.find_branch(branch)?
-                        .unwrap_or_else(|| {
-                            tracing::error!("Branch {} does not exist", branch);
-                            std::process::exit(1);
-                        })
-                } else {
-                    ctx.current_branch()?
-                };
-
-                Queue::initialize(&ctx, queue, base_branch)?.switch_to(merge)?;
-
-                Ok(())
-            } else {
-                tracing::error!("Queue `{}` does not exist", queue);
-                std::process::exit(1);
+    let queue = match Queue::for_queue(&ctx, queue) {
+        Ok(Some(queue)) => queue,
+        Ok(None) => {
+            if !create {
+                throw!(DATAERR, "Queue `{}` does not exist", queue);
             }
+
+            let base_branch = if let Some(branch) = branch {
+                match ctx.find_branch(branch) {
+                    Ok(Some(branch)) => branch,
+                    Ok(None) => throw!(DATAERR, "Branch {} does not exist", branch),
+                    Err(err) => crate::error::handle_any_git_error(err)?,
+                }
+            } else if let Some(branch) = ensure!(ctx.current_branch()) {
+                branch
+            } else {
+                crate::error::not_properly_initialized()?
+            };
+
+            // We did just check that the queue didn't exist, so this cannot return Ok(None).
+            ensure!(Queue::initialize(&ctx, queue, base_branch)).unwrap()
         }
-        Err(err) => Err(err)
+        Err(err) => crate::error::handle_any_git_error(err)?,
     };
 
-    res
+    ensure!(queue.switch_to(merge));
+
+    Ok(())
 }
