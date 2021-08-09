@@ -99,8 +99,8 @@ impl<'r> Queue<'r> {
         self.branch.is_head()
     }
 
-    pub fn switch_to(&self, merge: bool) -> Result<(), Error> {
-        self.ctx.checkout_branch(&self.branch, merge)
+    pub fn switch_to(&self) -> Result<(), Error> {
+        self.ctx.checkout_branch(&self.branch, true)
     }
 
     pub fn close(mut self) -> Result<(), Error> {

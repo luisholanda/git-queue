@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::error::Error;
 use crate::gpg::GitGpg;
 use git2::{build::CheckoutBuilder, ErrorClass, ErrorCode, Repository, Signature};
@@ -71,14 +73,23 @@ impl Ctx {
         Ok(Some(git2::Branch::wrap(head)))
     }
 
-    pub fn checkout_branch(&self, branch: &git2::Branch<'_>, merge: bool) -> Result<(), Error> {
+    pub fn checkout_branch(
+        &self,
+        branch: &git2::Branch<'_>,
+        allow_conflicts: bool,
+    ) -> Result<(), Error> {
         let tree = branch.get().peel_to_tree()?;
         self.repo.checkout_tree(
             tree.as_object(),
-            Some(CheckoutBuilder::new().conflict_style_merge(merge)),
+            Some(
+                CheckoutBuilder::new()
+                    .safe()
+                    .allow_conflicts(allow_conflicts),
+            ),
         )?;
         let name = branch.get().name().ok_or(Error::NonUtf8)?;
-        Ok(self.repo.set_head(name)?)
+        self.repo.set_head(name)?;
+        Ok(())
     }
 
     pub fn find_branch(&self, branch: &str) -> Result<Option<git2::Branch<'_>>, Error> {
@@ -87,5 +98,12 @@ impl Ctx {
             Err(err) if err.code() == ErrorCode::NotFound => Ok(None),
             Err(err) => Err(err.into()),
         }
+    }
+
+    pub fn workdir_status(&self) -> Result<git2::Statuses<'_>, Error> {
+        let status = self.repo.statuses(Some(
+            git2::StatusOptions::new().show(git2::StatusShow::Workdir),
+        ))?;
+        Ok(status)
     }
 }
